@@ -1,0 +1,13 @@
+# Fenrir PDF Reader
+
+__pycache__/
+*.pyc
+venv/
+build/
+dist/
+*.spec
+*.egg-info/
+.DS_Store
+Thumbs.db
+*.exe
+release/

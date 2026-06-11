@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="32" fill="#1a1a2e"/>
+  <!-- Wolf head silhouette -->
+  <path d="M128 40 L80 70 L60 60 L70 90 L50 110 L75 115 L85 130 L128 140 L171 130 L181 115 L206 110 L186 90 L196 60 L176 70 L128 40Z" fill="#e94560"/>
+  <!-- Eyes -->
+  <circle cx="108" cy="95" r="6" fill="#fff"/>
+  <circle cx="148" cy="95" r="6" fill="#fff"/>
+  <!-- Ear details -->
+  <polygon points="128,40 105,65 151,65" fill="#16213e"/>
+  <!-- PDF text -->
+  <rect x="80" y="150" width="96" height="50" rx="6" fill="#0f3460"/>
+  <text x="128" y="183" font-family="monospace" font-size="24" font-weight="bold" fill="#e94560" text-anchor="middle">PDF</text>
+</svg>
