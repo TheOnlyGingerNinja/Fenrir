@@ -30,8 +30,8 @@ Fenrir is already set as the **default PDF application** on this machine. Double
    pip install PySide6 PyMuPDF
    ```
 3. **Get the code** — either:
-   - Download ZIP from: https://github.com/aether-flowridge/Fenrir
-   - Or clone with: `git clone https://github.com/aether-flowridge/Fenrir.git`
+   - Download ZIP from: https://github.com/TheOnlyGingerNinja/Fenrir
+   - Or clone with: `git clone https://github.com/TheOnlyGingerNinja/Fenrir.git`
 4. Run it:
    ```cmd
    cd Fenrir
@@ -144,4 +144,4 @@ fenrir-reader/
 
 ## GitHub Repo
 
-https://github.com/aether-flowridge/Fenrir
+https://github.com/TheOnlyGingerNinja/Fenrir
