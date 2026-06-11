@@ -19,8 +19,9 @@ def build():
     if os.path.isdir(dist_dir):
         shutil.rmtree(dist_dir)
 
-    cmd = [
-        "pyinstaller",
+    # Use sys.executable -m PyInstaller so the venv's pyinstaller is used
+    pyinstaller = [sys.executable, "-m", "PyInstaller"]
+    cmd = pyinstaller + [
         "--name", APP_NAME,
         "--windowed",
         "--onefile",

@@ -10,4 +10,6 @@ dist/
 .DS_Store
 Thumbs.db
 *.exe
-release/
+release/dist/
+build/
+Fenrir.spec
