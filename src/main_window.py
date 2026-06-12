@@ -24,6 +24,7 @@ from src.viewer.canvas import PdfCanvas
 from src.sidebar.panels import SidebarWidget
 from src.dialogs.search_dialog import SearchDialog
 from src.dialogs.goto_dialog import GotoPageDialog
+from src.dialogs.properties import DocumentPropertiesDialog
 from src.editor.annotations import Annotation, AnnotationManager
 from src.editor.widgets import EditorToolbar, TOOL_SELECT
 from src.utils.settings import AppSettings
@@ -121,6 +122,24 @@ class MainWindow(QMainWindow):
         self._act_quit.setShortcut(QKeySequence.Quit)
         self._act_quit.triggered.connect(self.close)
 
+        self._act_saveas = QAction("💾 Save As...", self)
+        self._act_saveas.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self._act_saveas.setStatusTip("Save a copy of the document")
+        self._act_saveas.setEnabled(False)
+        self._act_saveas.triggered.connect(self._on_saveas)
+
+        self._act_export_image = QAction("🖼 Export Page as Image...", self)
+        self._act_export_image.setShortcut(QKeySequence("Ctrl+Shift+E"))
+        self._act_export_image.setStatusTip("Export current page as PNG")
+        self._act_export_image.setEnabled(False)
+        self._act_export_image.triggered.connect(self._on_export_image)
+
+        self._act_properties = QAction("ℹ Document Properties...", self)
+        self._act_properties.setShortcut(QKeySequence("Ctrl+D"))
+        self._act_properties.setStatusTip("Show document metadata")
+        self._act_properties.setEnabled(False)
+        self._act_properties.triggered.connect(self._on_properties)
+
         # ── Navigation Actions ──
         self._act_first = QAction("⏮ First", self)
         self._act_first.setShortcut(QKeySequence.MoveToStartOfDocument)
@@ -217,7 +236,7 @@ class MainWindow(QMainWindow):
         self._act_toggle_form.triggered.connect(self._on_toggle_form)
 
         self._act_save_form = QAction("💾 Save Form", self)
-        self._act_save_form.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self._act_save_form.setShortcut(QKeySequence("Ctrl+Alt+S"))
         self._act_save_form.setEnabled(False)
         self._act_save_form.triggered.connect(self._on_save_form)
 
@@ -257,7 +276,16 @@ class MainWindow(QMainWindow):
         # File menu
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(self._act_open)
+
+        # Open Recent submenu
+        self._recent_menu = file_menu.addMenu("Open Recent")
+        self._update_recent_menu()
+
         file_menu.addAction(self._act_close)
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_saveas)
+        file_menu.addAction(self._act_export_image)
+        file_menu.addAction(self._act_properties)
         file_menu.addSeparator()
         file_menu.addAction(self._act_print)
         file_menu.addSeparator()
@@ -396,6 +424,7 @@ class MainWindow(QMainWindow):
 
             self._canvas.load_document(self._doc)
             AppSettings.add_recent_file(filepath)
+            self._update_recent_menu()
             self._update_title()
 
         except Exception as e:
@@ -418,6 +447,73 @@ class MainWindow(QMainWindow):
             self._editor_toolbar.hide()
             self._act_toggle_editor.setChecked(False)
             self._act_toggle_editor.setEnabled(False)
+            self._act_toggle_form.setChecked(False)
+            self._act_toggle_form.setEnabled(False)
+            self._act_saveas.setEnabled(False)
+            self._act_export_image.setEnabled(False)
+            self._act_properties.setEnabled(False)
+
+    def _on_saveas(self) -> None:
+        """Save a copy of the current document to a new file."""
+        if not self._doc:
+            return
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Save As", "", "PDF Files (*.pdf)"
+        )
+        if filepath:
+            try:
+                self._doc._doc.save(filepath, incremental=False)
+                self._status.showMessage(f"Saved: {os.path.basename(filepath)}", 5000)
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", str(e))
+
+    def _on_export_image(self) -> None:
+        """Export the current page as a PNG image."""
+        if not self._doc:
+            return
+        page_num = self._canvas.current_page
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Export Page as Image", f"page_{page_num + 1}.png",
+            "PNG (*.png);;JPEG (*.jpg *.jpeg)"
+        )
+        if filepath:
+            try:
+                img = self._doc.render_page(page_num, dpi=300)
+                img.save(filepath)
+                self._status.showMessage(
+                    f"Page {page_num + 1} exported: {os.path.basename(filepath)}", 5000
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", str(e))
+
+    def _on_properties(self) -> None:
+        """Show document properties dialog."""
+        if not self._doc:
+            return
+        dialog = DocumentPropertiesDialog(self._doc, self)
+        dialog.exec()
+
+    def _update_recent_menu(self) -> None:
+        """Rebuild the Open Recent submenu from saved settings."""
+        self._recent_menu.clear()
+        files = AppSettings.recent_files()
+        if not files:
+            empty = self._recent_menu.addAction("(No Recent Files)")
+            empty.setEnabled(False)
+            return
+        for path in files:
+            # Show just the filename, but store the full path
+            name = os.path.basename(path)
+            action = self._recent_menu.addAction(name)
+            action.setToolTip(path)
+            action.setData(path)
+            action.triggered.connect(lambda checked, p=path: self.open_file(p))
+        self._recent_menu.addSeparator()
+        clear_action = self._recent_menu.addAction("Clear Recent Files")
+        clear_action.triggered.connect(lambda: (
+            AppSettings.set_recent_files([]),
+            self._update_recent_menu()
+        ))
 
     def _on_print(self) -> None:
         if not self._doc:
@@ -546,6 +642,9 @@ class MainWindow(QMainWindow):
             )
             # Enable editor toolbar
             self._act_toggle_editor.setEnabled(True)
+            self._act_saveas.setEnabled(True)
+            self._act_export_image.setEnabled(True)
+            self._act_properties.setEnabled(True)
 
             # Enable form fill if the document has AcroForms
             self._act_toggle_form.setEnabled(self._canvas.has_form_fields())
