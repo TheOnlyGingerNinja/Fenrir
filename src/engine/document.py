@@ -249,14 +249,13 @@ class FenrirDocument:
     # ── form fields (AcroForms) ──────────────────────────────────
 
     FORM_FIELD_TYPES = {
-        0: "button",
-        1: "radio_button",
-        2: "text",
-        3: "textarea",
-        4: "signature",
-        5: "checkbox",
-        6: "combo_box",
-        7: "list_box",
+        1: "button",        # PDF_WIDGET_TYPE_BUTTON
+        2: "checkbox",      # PDF_WIDGET_TYPE_CHECKBOX
+        3: "combo_box",     # PDF_WIDGET_TYPE_COMBOBOX
+        4: "list_box",      # PDF_WIDGET_TYPE_LISTBOX
+        5: "radio_button",  # PDF_WIDGET_TYPE_RADIOBUTTON
+        6: "signature",     # PDF_WIDGET_TYPE_SIGNATURE
+        7: "text",          # PDF_WIDGET_TYPE_TEXT
     }
 
     def has_forms(self) -> bool:
