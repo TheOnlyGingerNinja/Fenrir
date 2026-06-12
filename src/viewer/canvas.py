@@ -1193,19 +1193,31 @@ class PdfCanvas(QGraphicsView):
                     continue
 
                 ftype = field["type"]
-                color = QColor(0, 140, 230, 40)  # brighter blue fill, slightly transparent
-                border = QPen(QColor(0, 110, 220, 200), 2.0)
-                border.setStyle(Qt.DashLine)
+                # High-visibility overlay: bold blue border + warm fill
+                fill_color = QColor(200, 230, 255, 60)   # light blue fill
+                border = QPen(QColor(0, 90, 200), 2.5)
+                border.setStyle(Qt.SolidLine)
 
                 if ftype in ("text", "textarea"):
-                    item = self._scene.addRect(scene_rect, border, QBrush(color))
+                    item = self._scene.addRect(scene_rect, border, QBrush(fill_color))
                     item.setZValue(50)
                     item.setData(0, key)
+                    item.setToolTip(f"Click to type: {field['name']}")
+
+                    # Add a small "✏️" indicator
+                    indicator = self._scene.addSimpleText("✎")
+                    indicator.setPos(scene_rect.x() + 2, scene_rect.y() + 1)
+                    indicator.setZValue(52)
+                    fnt = indicator.font()
+                    fnt.setPointSize(8)
+                    indicator.setFont(fnt)
+                    indicator.setBrush(QColor(0, 90, 200))
+                    self._form_items[key + "_ico"] = indicator
 
                     # Show current value if any
                     if field["value"]:
                         txt = self._scene.addSimpleText(str(field["value"]))
-                        txt.setPos(scene_rect.x() + 2, scene_rect.y() + 1)
+                        txt.setPos(scene_rect.x() + 16, scene_rect.y() + 1)
                         txt.setZValue(51)
                         font = txt.font()
                         font.setPointSize(9)
@@ -1217,17 +1229,18 @@ class PdfCanvas(QGraphicsView):
                     size = min(scene_rect.width(), scene_rect.height())
                     item = self._scene.addRect(
                         scene_rect.x(), scene_rect.y(), size, size,
-                        border, QBrush(color)
+                        border, QBrush(fill_color)
                     )
                     item.setZValue(50)
                     item.setData(0, key)
+                    item.setToolTip("Click to toggle checkbox")
 
                     # Check mark if checked
                     if field["value"] and field["value"] not in ("Off", "No", ""):
                         check = self._scene.addSimpleText("✓")
                         check.setPos(scene_rect.x() + 1, scene_rect.y() - 2)
                         check.setZValue(51)
-                        check.setBrush(QColor(0, 120, 215))
+                        check.setBrush(QColor(0, 90, 200))
                         font = check.font()
                         font.setPointSize(11)
                         font.setBold(True)
@@ -1239,10 +1252,11 @@ class PdfCanvas(QGraphicsView):
                     # Circle
                     item = self._scene.addEllipse(
                         scene_rect.x(), scene_rect.y(), size, size,
-                        border, QBrush(color)
+                        border, QBrush(fill_color)
                     )
                     item.setZValue(50)
                     item.setData(0, key)
+                    item.setToolTip("Click to select")
 
                     # Dot if selected
                     if field["value"] and field["value"] not in ("Off", ""):
@@ -1250,13 +1264,13 @@ class PdfCanvas(QGraphicsView):
                             scene_rect.x() + size * 0.25,
                             scene_rect.y() + size * 0.25,
                             size * 0.5, size * 0.5,
-                            QPen(Qt.NoPen), QBrush(QColor(0, 120, 215))
+                            QPen(Qt.NoPen), QBrush(QColor(0, 90, 200))
                         )
                         dot.setZValue(51)
                         self._form_items[key + "_val"] = dot
 
                 elif ftype in ("combo_box", "list_box"):
-                    item = self._scene.addRect(scene_rect, border, QBrush(color))
+                    item = self._scene.addRect(scene_rect, border, QBrush(fill_color))
                     item.setZValue(50)
                     item.setData(0, key)
                     # Dropdown arrow indicator
