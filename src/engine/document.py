@@ -260,15 +260,21 @@ class FenrirDocument:
 
     # ── form fields (AcroForms) ──────────────────────────────────
 
+    # Map PyMuPDF widget type integers to a friendly string. Backed by
+    # the actual PyMuPDF constants so the mapping tracks whatever
+    # version of fitz is installed (1.27+ in this project).
     FORM_FIELD_TYPES = {
-        1: "button",        # PDF_WIDGET_TYPE_BUTTON
-        2: "checkbox",      # PDF_WIDGET_TYPE_CHECKBOX
-        3: "combo_box",     # PDF_WIDGET_TYPE_COMBOBOX
-        4: "list_box",      # PDF_WIDGET_TYPE_LISTBOX
-        5: "radio_button",  # PDF_WIDGET_TYPE_RADIOBUTTON
-        6: "signature",     # PDF_WIDGET_TYPE_SIGNATURE
-        7: "text",          # PDF_WIDGET_TYPE_TEXT
+        fitz.PDF_WIDGET_TYPE_BUTTON: "button",
+        fitz.PDF_WIDGET_TYPE_CHECKBOX: "checkbox",
+        fitz.PDF_WIDGET_TYPE_COMBOBOX: "combo_box",
+        fitz.PDF_WIDGET_TYPE_LISTBOX: "list_box",
+        fitz.PDF_WIDGET_TYPE_RADIOBUTTON: "radio_button",
+        fitz.PDF_WIDGET_TYPE_SIGNATURE: "signature",
+        fitz.PDF_WIDGET_TYPE_TEXT: "text",
     }
+
+    # Reverse lookup for any callers that need to set a value by name.
+    FORM_FIELD_NAME_TO_TYPE = {v: k for k, v in FORM_FIELD_TYPES.items()}
 
     def has_forms(self) -> bool:
         """Check if the document has any interactive form fields (AcroForm or XFA)."""
@@ -307,14 +313,18 @@ class FenrirDocument:
             })
         return fields
 
-    def set_form_field(self, page_num: int, field_name: str, value) -> None:
-        """Set the value of a form field and update it."""
+    def set_form_field(self, page_num: int, field_name: str, value) -> bool:
+        """Set the value of a form field and update it.
+
+        Returns True if a matching widget was found and updated, False otherwise.
+        """
         page = self._doc[page_num]
         for widget in page.widgets():
             if widget.field_name == field_name or widget.field_label == field_name:
                 widget.field_value = value
                 widget.update()
-                return
+                return True
+        return False
 
     def save_form(self, filepath: str) -> None:
         """Save filled form data back to the PDF (prefers incremental save)."""

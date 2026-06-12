@@ -159,6 +159,8 @@ class PdfCanvas(QGraphicsView):
         self._form_items: dict[str, QGraphicsItem] = {}  # field_key -> overlay item
         self._form_text_input: QLineEdit | None = None  # active text field widget
         self._form_active_field: str | None = None  # key of currently focused field
+        self._form_active_scene_rect: QRectF | None = None  # scene rect of active field
+        self._form_scroll_connections: list = []  # scrollbar signals to disconnect on cancel
 
         # Search results
         self._search_results: list[SearchResult] = []
@@ -195,6 +197,23 @@ class PdfCanvas(QGraphicsView):
         self._selection.clear()
         self._clear_search_results()
         self._clear_annotation_overlays()
+        # Reset form-fill state so widgets/overlays/QLineEdit from the
+        # previous document don't leak into the new one. We deliberately
+        # leave _form_mode in whatever state the caller set it in — the
+        # MainWindow re-toggles form mode in _on_document_loaded, which
+        # handles re-discovery of fields for the new document.
+        self._cancel_form_input()
+        self._clear_form_overlays()
+        self._form_fields.clear()
+        # Remove any temporary ink preview leftover from an interrupted stroke
+        if hasattr(self, '_temp_ink_item') and self._temp_ink_item:
+            scene = self._scene
+            if scene:
+                scene.removeItem(self._temp_ink_item)
+            self._temp_ink_item = None
+        self._ink_points = []
+        self._current_stroke = []
+        self._current_stroke_page = None
         self._scene.clear()
 
         # Initialize annotation manager
@@ -576,6 +595,10 @@ class PdfCanvas(QGraphicsView):
 
     def _rebuild_and_render(self) -> None:
         """Rebuild page layout and re-render after zoom change."""
+        # Dismiss any active text input — its geometry is tied to the
+        # previous scene rect, which is about to be invalidated by the
+        # rebuild. The user can re-click the field to start a new edit.
+        self._cancel_form_input()
         self._clear_search_items()
         self._clear_annotation_overlays()
         self._clear_form_overlays()
@@ -1346,11 +1369,54 @@ class PdfCanvas(QGraphicsView):
         self._form_items.clear()
 
     def _cancel_form_input(self) -> None:
-        """Remove any active text input widget."""
+        """Remove any active text input widget and detach scroll listeners."""
+        # Disconnect any scrollbar reposition listeners we attached in
+        # _on_form_field_click — otherwise they would fire on a stale
+        # _form_text_input and either crash or reposition a deleted widget.
+        for conn in getattr(self, "_form_scroll_connections", []):
+            try:
+                if hasattr(conn, "disconnect"):
+                    conn.disconnect()
+            except (RuntimeError, TypeError):
+                # Already disconnected or invalid handle — safe to ignore.
+                pass
+        self._form_scroll_connections = []
         if self._form_text_input:
             self._form_text_input.deleteLater()
             self._form_text_input = None
         self._form_active_field = None
+        self._form_active_scene_rect = None
+
+    def _reposition_form_input(self) -> None:
+        """Re-position the active form text input after a scroll event.
+
+        Reads the cached scene rect, converts it to current viewport
+        coordinates, and updates the QLineEdit's geometry. If the rect
+        is no longer visible, the widget is hidden until the field
+        comes back into view (e.g. user scrolls back). This keeps the
+        text input glued to its field even when the user scrolls.
+        """
+        if not self._form_text_input or self._form_active_scene_rect is None:
+            return
+        try:
+            viewport_rect = self.mapFromScene(
+                self._form_active_scene_rect
+            ).boundingRect()
+        except Exception:
+            return
+        visible_rect = self.viewport().rect()
+        # If the field is entirely off-screen, hide the widget rather
+        # than leave it stranded at a stale coordinate.
+        if not viewport_rect.intersects(visible_rect):
+            self._form_text_input.hide()
+            return
+        self._form_text_input.setGeometry(
+            int(viewport_rect.x()), int(viewport_rect.y()),
+            int(viewport_rect.width()),
+            max(20, int(viewport_rect.height()))
+        )
+        if not self._form_text_input.isVisible():
+            self._form_text_input.show()
 
     def _on_form_field_click(self, page_num: int, field: dict, scene_pos: QPointF) -> None:
         """Handle clicking on a form field in form fill mode."""
@@ -1360,6 +1426,9 @@ class PdfCanvas(QGraphicsView):
         if ftype in ("text", "textarea"):
             scene_rect = self._page_rect_to_scene(page_num, field["rect"])
             self._form_active_field = key
+            # Cache the original scene rect so we can reposition the
+            # overlay QLineEdit as the view scrolls (see _on_scrollbar_changed).
+            self._form_active_scene_rect = scene_rect
             # Create an overlay QLineEdit for text input.
             # CRITICAL: mapFromScene converts scene coordinates to viewport
             # (widget) coordinates — setGeometry expects viewport coords.
@@ -1379,16 +1448,35 @@ class PdfCanvas(QGraphicsView):
             self._form_text_input.returnPressed.connect(
                 lambda k=key: self._commit_form_text(k)
             )
+            # Reposition on scroll. valueChanged fires for every scroll
+            # tick, but the only work it does is re-mapping the cached
+            # scene rect to the new viewport coords — cheap.
+            self._form_scroll_connections.append(
+                self.verticalScrollBar().valueChanged.connect(
+                    self._reposition_form_input
+                )
+            )
+            self._form_scroll_connections.append(
+                self.horizontalScrollBar().valueChanged.connect(
+                    self._reposition_form_input
+                )
+            )
             self._form_text_input.setFocus()
             self._form_text_input.show()
 
         elif ftype == "checkbox":
             new_val = "Yes" if field["value"] in ("Off", "No", "") else "Off"
-            self._doc.set_form_field(page_num, field["name"], new_val)
+            if self._doc is not None:
+                self._doc.set_form_field(page_num, field["name"], new_val)
+            # Mirror the new value into the cache so the re-rendered
+            # overlay reflects the toggle immediately.
+            field["value"] = new_val
             self._render_form_overlays()
 
         elif ftype == "radio_button":
-            self._doc.set_form_field(page_num, field["name"], "Yes")
+            if self._doc is not None:
+                self._doc.set_form_field(page_num, field["name"], "Yes")
+            field["value"] = "Yes"
             self._render_form_overlays()
 
         elif ftype in ("combo_box", "list_box"):
@@ -1413,7 +1501,10 @@ class PdfCanvas(QGraphicsView):
                 cancel_btn.clicked.connect(dialog.reject)
                 dialog.setResult(QDialog.Rejected)
                 if dialog.exec() == QDialog.Accepted:
-                    self._doc.set_form_field(page_num, field["name"], combo.currentText())
+                    chosen = combo.currentText()
+                    if self._doc is not None:
+                        self._doc.set_form_field(page_num, field["name"], chosen)
+                    field["value"] = chosen
                     self._render_form_overlays()
 
     def _commit_form_text(self, key: str) -> None:
@@ -1422,10 +1513,19 @@ class PdfCanvas(QGraphicsView):
             return
         text = self._form_text_input.text()
         parts = self._form_active_field.split(":", 1)
-        if len(parts) == 2:
+        if len(parts) == 2 and self._doc is not None:
             page_num = int(parts[0])
             field_name = parts[1]
-            self._doc.set_form_field(page_num, field_name, text)
+            # 1) Push the value into the underlying PyMuPDF document.
+            ok = self._doc.set_form_field(page_num, field_name, text)
+            # 2) Update the cached _form_fields entry so the next
+            #    _render_form_overlays() call displays the new value
+            #    without needing the user to toggle form mode off/on.
+            if ok and page_num in self._form_fields:
+                for f in self._form_fields[page_num]:
+                    if f.get("name") == field_name:
+                        f["value"] = text
+                        break
         self._cancel_form_input()
         self._render_form_overlays()
 
