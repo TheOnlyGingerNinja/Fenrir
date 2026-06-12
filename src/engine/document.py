@@ -271,12 +271,15 @@ class FenrirDocument:
     }
 
     def has_forms(self) -> bool:
-        """Check if the document has any interactive form fields."""
+        """Check if the document has any interactive form fields (AcroForm or XFA)."""
+        # Quick catalog-level check — catches AcroForm AND XFA
+        if self._doc.is_form_pdf:
+            return True
+        # Fallback: iterate pages looking for widgets
         for i in range(self.page_count):
             try:
                 page = self._doc[i]
-                # Force widget parsing by accessing the page
-                if page.first_widget or list(page.widgets()):
+                if list(page.widgets()):
                     return True
             except Exception:
                 continue

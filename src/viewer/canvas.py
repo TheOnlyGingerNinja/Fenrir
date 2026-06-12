@@ -1046,7 +1046,15 @@ class PdfCanvas(QGraphicsView):
 
     def _update_selection_overlay(self) -> None:
         """Draw the current selection rectangle on the page."""
-        self._selection.clear()
+        # Remove old overlay rects WITHOUT resetting selection state.
+        # (TextSelectionOverlay.clear() also nukes anchor_page/is_selecting,
+        #  which would make the guard below always bail out — don't call it.)
+        for r in self._selection.selection_rects:
+            scene = self._selection.canvas.scene()
+            if scene:
+                scene.removeItem(r)
+        self._selection.selection_rects.clear()
+
         if self._selection.anchor_page < 0:
             return
 
@@ -1223,9 +1231,9 @@ class PdfCanvas(QGraphicsView):
                     continue
 
                 ftype = field["type"]
-                # High-visibility overlay: bold blue border + warm fill
-                fill_color = QColor(200, 230, 255, 60)   # light blue fill
-                border = QPen(QColor(0, 90, 200), 2.5)
+                # High-visibility overlay: bold blue border with semi-transparent fill
+                fill_color = QColor(100, 190, 255, 100)   # brighter blue fill, more opaque
+                border = QPen(QColor(0, 140, 255), 3.5)
                 border.setStyle(Qt.SolidLine)
 
                 if ftype in ("text", "textarea"):

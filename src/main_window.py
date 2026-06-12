@@ -426,7 +426,8 @@ class MainWindow(QMainWindow):
         AppSettings.set_zoom(self._canvas.zoom)
 
         if self._doc:
-            self._doc.close()
+            self._canvas.close_document()
+            self._doc = None
         if self._search_dialog:
             self._search_dialog.close()
 
@@ -713,7 +714,9 @@ class MainWindow(QMainWindow):
             has_forms = self._canvas.has_form_fields()
             self._act_toggle_form.setEnabled(has_forms)
             if has_forms:
-                self._status.showMessage("Form fields detected — click 📝 Forms to fill", 5000)
+                self._act_toggle_form.setChecked(True)
+                self._on_toggle_form(True)
+                self._status.showMessage("✅ Form fields detected — fillable areas highlighted", 8000)
 
             # Pass annotation manager to sidebar
             self._sidebar.set_annotation_manager(self._canvas.annot_manager)
