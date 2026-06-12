@@ -209,6 +209,108 @@ class AnnotationManager:
         except Exception:
             return None
 
+    # ── Undo / Redo ─────────────────────────────────────────────
+
+    def _ensure_undo_stack(self) -> None:
+        if not hasattr(self, "_undo_stack"):
+            self._undo_stack: list[tuple] = []
+            self._redo_stack: list[tuple] = []
+
+    def push_undo(self, action_type: str, data: dict) -> None:
+        """Record an action for undo. Clears redo stack."""
+        self._ensure_undo_stack()
+        self._undo_stack.append((action_type, data))
+        self._redo_stack.clear()
+
+    def can_undo(self) -> bool:
+        self._ensure_undo_stack()
+        return bool(self._undo_stack)
+
+    def can_redo(self) -> bool:
+        self._ensure_undo_stack()
+        return bool(self._redo_stack)
+
+    def undo_last(self) -> dict | None:
+        """Undo the last action. Returns a dict describing what happened."""
+        self._ensure_undo_stack()
+        if not self._undo_stack:
+            return None
+        action_type, data = self._undo_stack.pop()
+        self._redo_stack.append((action_type, data))
+        result = {"action": action_type, "undo": True}
+
+        if action_type == "add":
+            # Remove the annotation that was added
+            annot_id = data.get("annot_id")
+            if annot_id and annot_id in self._annotations:
+                annot = self._annotations[annot_id]
+                # Delete from PDF if it was saved
+                if not annot.is_new and annot.pdf_annot:
+                    try:
+                        page = self._doc._doc[annot.page]
+                        page.delete_annot(annot.pdf_annot)
+                    except Exception:
+                        pass
+                del self._annotations[annot_id]
+                result["annot_id"] = annot_id
+
+        elif action_type == "delete":
+            # Restore the deleted annotation
+            annot_data = data.get("annot", {})
+            annot = Annotation(
+                annot_type=annot_data.get("type", "highlight"),
+                page=annot_data.get("page", 0),
+                rect=annot_data.get("rect", [0, 0, 0, 0]),
+                color=annot_data.get("color", (1, 1, 0)),
+                opacity=annot_data.get("opacity", 0.3),
+                content=annot_data.get("content", ""),
+            )
+            annot.id = annot_data.get("id", "")
+            self._annotations[annot.id] = annot
+            result["annot"] = annot
+
+        return result
+
+    def redo_last(self) -> dict | None:
+        """Redo the last undone action."""
+        self._ensure_undo_stack()
+        if not self._redo_stack:
+            return None
+        action_type, data = self._redo_stack.pop()
+        self._undo_stack.append((action_type, data))
+        result = {"action": action_type, "undo": False}
+
+        if action_type == "add":
+            # Re-add the annotation
+            annot_data = data.get("annot", {})
+            annot = Annotation(
+                annot_type=annot_data.get("type", "highlight"),
+                page=annot_data.get("page", 0),
+                rect=annot_data.get("rect", [0, 0, 0, 0]),
+                color=annot_data.get("color", (1, 1, 0)),
+                opacity=annot_data.get("opacity", 0.3),
+                content=annot_data.get("content", ""),
+            )
+            annot.id = annot_data.get("id", "")
+            self._annotations[annot.id] = annot
+            result["annot"] = annot
+
+        elif action_type == "delete":
+            # Re-delete the annotation
+            annot_id = data.get("annot_id")
+            if annot_id and annot_id in self._annotations:
+                annot = self._annotations[annot_id]
+                if not annot.is_new and annot.pdf_annot:
+                    try:
+                        page = self._doc._doc[annot.page]
+                        page.delete_annot(annot.pdf_annot)
+                    except Exception:
+                        pass
+                del self._annotations[annot_id]
+                result["annot_id"] = annot_id
+
+        return result
+
     # ── Adding ──────────────────────────────────────────────────
 
     def add_highlight(self, page_num: int, rect: tuple) -> Annotation:
@@ -256,11 +358,24 @@ class AnnotationManager:
         self._add(annot)
         return annot
 
-    def _add(self, annot: Annotation) -> None:
+    def _add(self, annot: Annotation, record_undo: bool = True) -> None:
         """Internal: register annotation."""
         self._annotations[annot.id] = annot
         self._page_annotations.setdefault(annot.page, []).append(annot)
         self._dirty = True
+        if record_undo:
+            self.push_undo("add", {
+                "annot_id": annot.id,
+                "annot": {
+                    "id": annot.id,
+                    "type": annot.type,
+                    "page": annot.page,
+                    "rect": annot.rect,
+                    "color": annot.color,
+                    "opacity": annot.opacity,
+                    "content": annot.content,
+                },
+            })
 
     # ── Removal ─────────────────────────────────────────────────
 
@@ -269,6 +384,19 @@ class AnnotationManager:
         if annot_id not in self._annotations:
             return False
         annot = self._annotations[annot_id]
+        # Save data for undo before removing
+        self.push_undo("delete", {
+            "annot_id": annot_id,
+            "annot": {
+                "id": annot.id,
+                "type": annot.type,
+                "page": annot.page,
+                "rect": annot.rect,
+                "color": annot.color,
+                "opacity": annot.opacity,
+                "content": annot.content,
+            },
+        })
         # Remove from page list
         if annot.page in self._page_annotations:
             self._page_annotations[annot.page] = [

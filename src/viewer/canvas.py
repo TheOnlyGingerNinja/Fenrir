@@ -1387,6 +1387,26 @@ class PdfCanvas(QGraphicsView):
             self.scroll_by(self._key_scroll_amount)
         elif key == Qt.Key_Space:
             self.scroll_by(self.viewport().height() * 0.8)
+        elif mod & Qt.ControlModifier and key == Qt.Key_Z and mod & Qt.ShiftModifier:
+            # Redo: Ctrl+Shift+Z
+            if self._annot_manager and self._annot_manager.can_redo():
+                result = self._annot_manager.redo_last()
+                if result:
+                    self._render_annotation_overlays()
+                    if result.get("annot_id"):
+                        self.annotation_deleted.emit(result["annot_id"])
+                    elif result.get("annot"):
+                        self.annotation_created.emit(result["annot"])
+        elif mod & Qt.ControlModifier and key == Qt.Key_Z:
+            # Undo: Ctrl+Z
+            if self._annot_manager and self._annot_manager.can_undo():
+                result = self._annot_manager.undo_last()
+                if result:
+                    self._render_annotation_overlays()
+                    if result.get("annot_id"):
+                        self.annotation_deleted.emit(result["annot_id"])
+                    elif result.get("annot"):
+                        self.annotation_created.emit(result["annot"])
         else:
             super().keyPressEvent(event)
 
