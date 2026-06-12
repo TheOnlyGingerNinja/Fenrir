@@ -8,10 +8,28 @@ import shutil
 import subprocess
 
 APP_NAME = "Fenrir"
-ICON = os.path.join("resources", "icons", "fenrir.png")
+ICON_PNG = os.path.join("resources", "icons", "fenrir.png")
+ICON = ICON_PNG
 MAIN = "main.py"
 
 SYSTEM = platform.system()
+
+def _ensure_icon() -> str:
+    """Convert PNG to ICO on Windows (PyInstaller can't bundle PNG as icon)."""
+    if SYSTEM != "Windows":
+        return ICON_PNG
+    ico_path = os.path.join(os.path.dirname(__file__) or ".", "resources", "icons", "fenrir.ico")
+    if os.path.isfile(ico_path):
+        return ico_path
+    try:
+        from PIL import Image
+        img = Image.open(ICON_PNG)
+        img.save(ico_path, format="ICO", sizes=[(256, 256)])
+        return ico_path
+    except ImportError:
+        print("⚠️  Pillow not installed — icon conversion skipped.")
+        print("   Install with: pip install Pillow\n")
+        return ICON_PNG
 
 
 def build():
@@ -25,7 +43,7 @@ def build():
         "--name", APP_NAME,
         "--windowed",
         "--onefile",
-        f"--icon={ICON}",
+        f"--icon={_ensure_icon()}",
     ]
 
     # Bundle resources: platform-specific separator
