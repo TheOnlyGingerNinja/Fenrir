@@ -379,13 +379,17 @@ class PdfCanvas(QGraphicsView):
                     i += 1
 
     def _update_scene_rect(self) -> None:
-        """Update the scene bounding rectangle."""
+        """Update the scene bounding rectangle from all page items."""
         if not self._page_items:
             return
-        last = self._page_items[-1]
-        total_w = last.pos().x() + last.page_rect.width() + MARGIN
-        total_h = last.pos().y() + last.page_rect.height() + MARGIN
-        self._scene.setSceneRect(QRectF(0, 0, total_w, total_h))
+        max_right = 0
+        max_bottom = 0
+        for item in self._page_items:
+            right = item.pos().x() + item.page_rect.width()
+            bottom = item.pos().y() + item.page_rect.height()
+            max_right = max(max_right, right)
+            max_bottom = max(max_bottom, bottom)
+        self._scene.setSceneRect(QRectF(0, 0, max_right + MARGIN, max_bottom + MARGIN))
 
     # ── rendering ───────────────────────────────────────────────
 
@@ -573,11 +577,37 @@ class PdfCanvas(QGraphicsView):
         if mode not in (LAYOUT_CONTINUOUS, LAYOUT_SINGLE, LAYOUT_FACING):
             return
         self._layout_mode = mode
-        # If we're leaving single/page mode, re-enable drag scrolling
+
+        # Auto-zoom to fit spread when entering facing mode
+        if mode == LAYOUT_FACING and self._doc:
+            self._zoom_to_fit_spread()
+
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self._rebuild_and_render()
         self.go_to_page(0)
         self.layout_mode_changed.emit(mode)
+
+    def _zoom_to_fit_spread(self) -> None:
+        """Calculate zoom level that fits a two-page spread in the viewport."""
+        if not self._doc or self._doc.page_count < 1:
+            return
+        view_w = self.viewport().width() if self.viewport() else 800
+        if view_w <= 0:
+            return
+        # Get page widths in points (at 72 DPI)
+        pw0, _ = self._doc.page_size(0, dpi=72.0).toTuple()
+        pw1 = pw0
+        if self._doc.page_count > 1:
+            pw1, _ = self._doc.page_size(1, dpi=72.0).toTuple()
+        ratio = self._dpi / 72.0
+        gap = max(4, PAGE_GAP)
+        total_pts = pw0 + pw1
+        if total_pts <= 0:
+            return
+        # zoom = (available_width) / (total_page_width * ratio)
+        zoom = (view_w - 2 * MARGIN - gap) / (total_pts * ratio)
+        self._zoom = max(0.1, min(5.0, zoom))
+        self._fit_mode = None
 
     @property
     def layout_mode(self) -> str:
@@ -1113,6 +1143,16 @@ class PdfCanvas(QGraphicsView):
             self._render_form_overlays()
             self.setDragMode(QGraphicsView.NoDrag)
             self.setCursor(QCursor(Qt.IBeamCursor))
+            # Show feedback
+            total = sum(len(f) for f in self._form_fields.values())
+            if total == 0:
+                parent = self.window()
+                if parent and hasattr(parent, '_status'):
+                    parent._status.showMessage("No fillable form fields found on this PDF", 5000)
+            else:
+                parent = self.window()
+                if parent and hasattr(parent, '_status'):
+                    parent._status.showMessage(f"Form mode: {total} fillable field(s) found", 5000)
         else:
             self._clear_form_overlays()
             self._cancel_form_input()
@@ -1153,8 +1193,9 @@ class PdfCanvas(QGraphicsView):
                     continue
 
                 ftype = field["type"]
-                color = QColor(0, 120, 215, 60)  # light blue fill
-                border = QPen(QColor(0, 100, 200), 1.5)
+                color = QColor(0, 140, 230, 40)  # brighter blue fill, slightly transparent
+                border = QPen(QColor(0, 110, 220, 200), 2.0)
+                border.setStyle(Qt.DashLine)
 
                 if ftype in ("text", "textarea"):
                     item = self._scene.addRect(scene_rect, border, QBrush(color))

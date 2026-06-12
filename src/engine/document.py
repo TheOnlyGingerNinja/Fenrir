@@ -261,9 +261,11 @@ class FenrirDocument:
 
     def has_forms(self) -> bool:
         """Check if the document has any interactive form fields."""
-        for i in range(min(self.page_count, 5)):
+        for i in range(self.page_count):
             try:
-                if list(self._doc[i].widgets()):
+                page = self._doc[i]
+                # Force widget parsing by accessing the page
+                if page.first_widget or list(page.widgets()):
                     return True
             except Exception:
                 continue

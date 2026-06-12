@@ -697,7 +697,10 @@ class MainWindow(QMainWindow):
             self._act_properties.setEnabled(True)
 
             # Enable form fill if the document has AcroForms
-            self._act_toggle_form.setEnabled(self._canvas.has_form_fields())
+            has_forms = self._canvas.has_form_fields()
+            self._act_toggle_form.setEnabled(has_forms)
+            if has_forms:
+                self._status.showMessage("Form fields detected — click 📝 Forms to fill", 5000)
 
             # Pass annotation manager to sidebar
             self._sidebar.set_annotation_manager(self._canvas.annot_manager)
