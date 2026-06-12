@@ -246,6 +246,65 @@ class FenrirDocument:
             current = self._rotation.get(i, 0)
             self._rotation[i] = (current + degrees) % 360
 
+    # ── form fields (AcroForms) ──────────────────────────────────
+
+    FORM_FIELD_TYPES = {
+        0: "button",
+        1: "radio_button",
+        2: "text",
+        3: "textarea",
+        4: "signature",
+        5: "checkbox",
+        6: "combo_box",
+        7: "list_box",
+    }
+
+    def has_forms(self) -> bool:
+        """Check if the document has any interactive form fields."""
+        for i in range(min(self.page_count, 5)):
+            try:
+                if list(self._doc[i].widgets()):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def get_form_fields(self, page_num: int) -> list[dict]:
+        """Get all form field widgets on a page."""
+        fields = []
+        for widget in self._doc[page_num].widgets():
+            choices = []
+            if hasattr(widget, "choices") and widget.choices:
+                choices = list(widget.choices)
+            fields.append({
+                "page": page_num,
+                "name": widget.field_name or "",
+                "type": self.FORM_FIELD_TYPES.get(widget.field_type, "unknown"),
+                "type_num": widget.field_type,
+                "rect": widget.rect,
+                "value": widget.field_value or "",
+                "label": widget.field_label or widget.field_name or "",
+                "flags": widget.field_flags,
+                "is_readonly": bool(widget.field_flags & 1),
+                "is_required": bool(widget.field_flags & 2),
+                "choices": choices,
+            })
+        return fields
+
+    def set_form_field(self, page_num: int, field_name: str, value) -> None:
+        """Set the value of a form field and update it."""
+        page = self._doc[page_num]
+        for widget in page.widgets():
+            if widget.field_name == field_name or widget.field_label == field_name:
+                widget.field_value = value
+                widget.update()
+                return
+
+    def save_form(self, filepath: str) -> None:
+        """Save filled form data back to the PDF (incremental save)."""
+        self._doc.save(filepath, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+        self._filepath = filepath
+
     # ── cleanup ─────────────────────────────────────────────────
 
     def close(self) -> None:

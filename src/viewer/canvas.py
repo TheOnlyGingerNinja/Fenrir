@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
     QGraphicsRectItem, QGraphicsItem, QGraphicsTextItem,
     QWidget, QVBoxLayout, QScrollBar, QApplication, QRubberBand,
-    QGraphicsSimpleTextItem,
+    QGraphicsSimpleTextItem, QLineEdit, QDialog, QVBoxLayout,
+    QHBoxLayout, QLabel, QPushButton, QComboBox,
 )
 
 from src.engine.document import FenrirDocument
@@ -141,6 +142,13 @@ class PdfCanvas(QGraphicsView):
         self._editor_width: float = 2.0
         self._ink_points: list[list[list[float]]] = []  # [[[x,y], ...], ...]
         self._current_stroke: list = []  # current in-progress ink stroke
+
+        # Form fill state
+        self._form_mode: bool = False
+        self._form_fields: dict[int, list[dict]] = {}  # page_num -> [field_dict, ...]
+        self._form_items: dict[str, QGraphicsItem] = {}  # field_key -> overlay item
+        self._form_text_input: QLineEdit | None = None  # active text field widget
+        self._form_active_field: str | None = None  # key of currently focused field
 
         # Search results
         self._search_results: list[SearchResult] = []
@@ -423,6 +431,7 @@ class PdfCanvas(QGraphicsView):
         """Rebuild page layout and re-render after zoom change."""
         self._clear_search_items()
         self._clear_annotation_overlays()
+        self._clear_form_overlays()
         self._scene.clear()
         self._page_items.clear()
         self._pixmap_cache.clear()
@@ -432,6 +441,8 @@ class PdfCanvas(QGraphicsView):
             self._render_visible_pages()
             self._show_search_results()
             self._render_annotation_overlays()
+            if self._form_mode:
+                self._render_form_overlays()
 
     # ── wheel zoom ──────────────────────────────────────────────
 
@@ -550,6 +561,21 @@ class PdfCanvas(QGraphicsView):
 
     def mousePressEvent(self, event) -> None:
         scene_pos = self.mapToScene(event.pos())
+
+        # ── Form Fill Mode: interact with form fields ──
+        if event.button() == Qt.LeftButton and self._form_mode:
+            self._cancel_form_input()
+            page_num = self._page_index_at_pos(scene_pos)
+            if page_num is not None and page_num in self._form_fields:
+                px, py = self._scene_to_page_coords(page_num, scene_pos)
+                for field in self._form_fields[page_num]:
+                    r = field["rect"]
+                    if r.x0 <= px <= r.x1 and r.y0 <= py <= r.y1:
+                        if field["is_readonly"]:
+                            break
+                        self._on_form_field_click(page_num, field, scene_pos)
+                        return
+            return
 
         # ── Highlight / Underline / Strikethrough: start selection ──
         if event.button() == Qt.LeftButton and self._active_tool in (
@@ -900,6 +926,232 @@ class PdfCanvas(QGraphicsView):
         for page_num in range(len(self._page_items)):
             for annot in self._annot_manager.for_page(page_num):
                 self._create_annot_overlay_item(annot)
+
+    # ── form mode ────────────────────────────────────────────────
+
+    def set_form_mode(self, enabled: bool) -> None:
+        """Enable or disable interactive form fill mode."""
+        self._form_mode = enabled
+        if enabled:
+            self._load_form_fields()
+            self._render_form_overlays()
+            self.setDragMode(QGraphicsView.NoDrag)
+            self.setCursor(QCursor(Qt.IBeamCursor))
+        else:
+            self._clear_form_overlays()
+            self._cancel_form_input()
+            self._form_fields.clear()
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.setCursor(QCursor(Qt.ArrowCursor))
+
+    def has_form_fields(self) -> bool:
+        """Check if the loaded document has any interactive form fields."""
+        return bool(self._doc and self._doc.has_forms())
+
+    def _load_form_fields(self) -> None:
+        """Load form field data for all pages from the document."""
+        self._form_fields.clear()
+        if not self._doc:
+            return
+        for i in range(self._doc.page_count):
+            fields = self._doc.get_form_fields(i)
+            if fields:
+                self._form_fields[i] = fields
+
+    def _render_form_overlays(self) -> None:
+        """Render form field overlays on visible pages."""
+        self._clear_form_overlays()
+        if not self._doc or not self._form_mode:
+            return
+
+        for page_num, fields in self._form_fields.items():
+            page_item = self._page_items[page_num] if page_num < len(self._page_items) else None
+            if not page_item:
+                continue
+
+            for field in fields:
+                key = f"{page_num}:{field['name']}"
+                scene_rect = self._page_rect_to_scene(page_num, field["rect"])
+
+                if field["is_readonly"]:
+                    continue
+
+                ftype = field["type"]
+                color = QColor(0, 120, 215, 60)  # light blue fill
+                border = QPen(QColor(0, 100, 200), 1.5)
+
+                if ftype in ("text", "textarea"):
+                    item = self._scene.addRect(scene_rect, border, QBrush(color))
+                    item.setZValue(50)
+                    item.setData(0, key)
+
+                    # Show current value if any
+                    if field["value"]:
+                        txt = self._scene.addSimpleText(str(field["value"]))
+                        txt.setPos(scene_rect.x() + 2, scene_rect.y() + 1)
+                        txt.setZValue(51)
+                        font = txt.font()
+                        font.setPointSize(9)
+                        txt.setFont(font)
+                        self._form_items[key + "_val"] = txt
+
+                elif ftype == "checkbox":
+                    # Draw a clickable square
+                    size = min(scene_rect.width(), scene_rect.height())
+                    item = self._scene.addRect(
+                        scene_rect.x(), scene_rect.y(), size, size,
+                        border, QBrush(color)
+                    )
+                    item.setZValue(50)
+                    item.setData(0, key)
+
+                    # Check mark if checked
+                    if field["value"] and field["value"] not in ("Off", "No", ""):
+                        check = self._scene.addSimpleText("✓")
+                        check.setPos(scene_rect.x() + 1, scene_rect.y() - 2)
+                        check.setZValue(51)
+                        check.setBrush(QColor(0, 120, 215))
+                        font = check.font()
+                        font.setPointSize(11)
+                        font.setBold(True)
+                        check.setFont(font)
+                        self._form_items[key + "_val"] = check
+
+                elif ftype == "radio_button":
+                    size = min(scene_rect.width(), scene_rect.height())
+                    # Circle
+                    item = self._scene.addEllipse(
+                        scene_rect.x(), scene_rect.y(), size, size,
+                        border, QBrush(color)
+                    )
+                    item.setZValue(50)
+                    item.setData(0, key)
+
+                    # Dot if selected
+                    if field["value"] and field["value"] not in ("Off", ""):
+                        dot = self._scene.addEllipse(
+                            scene_rect.x() + size * 0.25,
+                            scene_rect.y() + size * 0.25,
+                            size * 0.5, size * 0.5,
+                            QPen(Qt.NoPen), QBrush(QColor(0, 120, 215))
+                        )
+                        dot.setZValue(51)
+                        self._form_items[key + "_val"] = dot
+
+                elif ftype in ("combo_box", "list_box"):
+                    item = self._scene.addRect(scene_rect, border, QBrush(color))
+                    item.setZValue(50)
+                    item.setData(0, key)
+                    # Dropdown arrow indicator
+                    arrow = self._scene.addSimpleText("▼")
+                    arrow.setPos(
+                        scene_rect.right() - 14,
+                        scene_rect.top() + 1
+                    )
+                    arrow.setZValue(51)
+                    arrow.setBrush(QColor(100, 100, 100))
+                    self._form_items[key + "_arr"] = arrow
+
+                    # Show current value
+                    if field["value"]:
+                        txt = self._scene.addSimpleText(str(field["value"]))
+                        txt.setPos(scene_rect.x() + 2, scene_rect.y() + 1)
+                        txt.setZValue(51)
+                        font = txt.font()
+                        font.setPointSize(9)
+                        txt.setFont(font)
+                        self._form_items[key + "_val"] = txt
+
+                self._form_items[key] = item
+
+    def _clear_form_overlays(self) -> None:
+        """Remove all form field overlay items from the scene."""
+        for item in self._form_items.values():
+            scene = item.scene()
+            if scene:
+                scene.removeItem(item)
+        self._form_items.clear()
+
+    def _cancel_form_input(self) -> None:
+        """Remove any active text input widget."""
+        if self._form_text_input:
+            self._form_text_input.deleteLater()
+            self._form_text_input = None
+        self._form_active_field = None
+
+    def _on_form_field_click(self, page_num: int, field: dict, scene_pos: QPointF) -> None:
+        """Handle clicking on a form field in form fill mode."""
+        ftype = field["type"]
+        key = f"{page_num}:{field['name']}"
+
+        if ftype in ("text", "textarea"):
+            scene_rect = self._page_rect_to_scene(page_num, field["rect"])
+            self._form_active_field = key
+            # Create an overlay QLineEdit for text input
+            self._form_text_input = QLineEdit(self)
+            self._form_text_input.setGeometry(
+                int(scene_rect.x()), int(scene_rect.y()),
+                int(scene_rect.width()),
+                max(20, int(scene_rect.height()))
+            )
+            self._form_text_input.setText(str(field["value"]))
+            self._form_text_input.selectAll()
+            self._form_text_input.setStyleSheet(
+                "QLineEdit { background-color: rgba(255, 255, 255, 220); "
+                "border: 2px solid #0078d7; padding: 2px; font-size: 11pt; }"
+            )
+            self._form_text_input.returnPressed.connect(
+                lambda k=key: self._commit_form_text(k)
+            )
+            self._form_text_input.setFocus()
+            self._form_text_input.show()
+
+        elif ftype == "checkbox":
+            new_val = "Yes" if field["value"] in ("Off", "No", "") else "Off"
+            self._doc.set_form_field(page_num, field["name"], new_val)
+            self._render_form_overlays()
+
+        elif ftype == "radio_button":
+            self._doc.set_form_field(page_num, field["name"], "Yes")
+            self._render_form_overlays()
+
+        elif ftype in ("combo_box", "list_box"):
+            choices = field["choices"]
+            if choices:
+                dialog = QDialog(self)
+                dialog.setWindowTitle(f"Select: {field['label'] or field['name']}")
+                layout = QVBoxLayout(dialog)
+                combo = QComboBox()
+                combo.addItems(choices)
+                current = str(field["value"])
+                if current in choices:
+                    combo.setCurrentText(current)
+                layout.addWidget(combo)
+                buttons = QHBoxLayout()
+                ok_btn = QPushButton("OK")
+                cancel_btn = QPushButton("Cancel")
+                buttons.addWidget(ok_btn)
+                buttons.addWidget(cancel_btn)
+                layout.addLayout(buttons)
+                ok_btn.clicked.connect(dialog.accept)
+                cancel_btn.clicked.connect(dialog.reject)
+                dialog.setResult(QDialog.Rejected)
+                if dialog.exec() == QDialog.Accepted:
+                    self._doc.set_form_field(page_num, field["name"], combo.currentText())
+                    self._render_form_overlays()
+
+    def _commit_form_text(self, key: str) -> None:
+        """Save text from the active QLineEdit to the form field."""
+        if not self._form_text_input or not self._form_active_field:
+            return
+        text = self._form_text_input.text()
+        parts = self._form_active_field.split(":", 1)
+        if len(parts) == 2:
+            page_num = int(parts[0])
+            field_name = parts[1]
+            self._doc.set_form_field(page_num, field_name, text)
+        self._cancel_form_input()
+        self._render_form_overlays()
 
     def _create_annot_overlay_item(self, annot: Annotation) -> None:
         """Create a scene item for a single annotation."""

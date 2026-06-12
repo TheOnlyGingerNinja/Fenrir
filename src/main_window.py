@@ -210,6 +210,17 @@ class MainWindow(QMainWindow):
         self._act_toggle_editor.setEnabled(False)
         self._act_toggle_editor.triggered.connect(self._on_toggle_editor)
 
+        # ── Form Fill Actions ──
+        self._act_toggle_form = QAction("📝 Forms", self)
+        self._act_toggle_form.setCheckable(True)
+        self._act_toggle_form.setEnabled(False)
+        self._act_toggle_form.triggered.connect(self._on_toggle_form)
+
+        self._act_save_form = QAction("💾 Save Form", self)
+        self._act_save_form.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self._act_save_form.setEnabled(False)
+        self._act_save_form.triggered.connect(self._on_save_form)
+
         # ── Build Toolbar ──
         self._toolbar.addAction(self._act_open)
         self._toolbar.addSeparator()
@@ -237,6 +248,8 @@ class MainWindow(QMainWindow):
         self._toolbar.addAction(self._act_sidebar)
         self._toolbar.addSeparator()
         self._toolbar.addAction(self._act_toggle_editor)
+        self._toolbar.addAction(self._act_toggle_form)
+        self._toolbar.addAction(self._act_save_form)
 
         # ── Build Menu Bar ──
         menubar = self.menuBar()
@@ -534,6 +547,9 @@ class MainWindow(QMainWindow):
             # Enable editor toolbar
             self._act_toggle_editor.setEnabled(True)
 
+            # Enable form fill if the document has AcroForms
+            self._act_toggle_form.setEnabled(self._canvas.has_form_fields())
+
     def _on_page_changed(self, page_num: int) -> None:
         """Update UI when the visible page changes."""
         self._update_page_spinner(page_num, self._doc.page_count if self._doc else 0)
@@ -576,6 +592,34 @@ class MainWindow(QMainWindow):
             # Return to select mode when hiding editor
             self._canvas.set_editor_tool(TOOL_SELECT)
             self._editor_toolbar.set_active_tool(TOOL_SELECT)
+
+    # ── Form Fill Callbacks ─────────────────────────────────────
+
+    def _on_toggle_form(self, checked: bool) -> None:
+        """Toggle form fill mode on/off."""
+        self._canvas.set_form_mode(checked)
+        if checked:
+            # Disable editor mode if form mode is on
+            if self._act_toggle_editor.isChecked():
+                self._act_toggle_editor.setChecked(False)
+                self._on_toggle_editor(False)
+            self._act_save_form.setEnabled(True)
+        else:
+            self._act_save_form.setEnabled(False)
+
+    def _on_save_form(self) -> None:
+        """Save filled form data back to the PDF."""
+        if not self._canvas._doc:
+            self._status.showMessage("No document open.", 3000)
+            return
+        # Save to same file (incremental save preserves everything)
+        try:
+            filepath = self._canvas._doc.filepath
+            self._canvas._doc.save_form(filepath)
+            self._status.showMessage("Form data saved to PDF ✓", 5000)
+        except Exception as e:
+            self._status.showMessage(f"Save error: {e}", 5000)
+
 
     def _on_save_annotations(self) -> None:
         """Save all annotations back to the PDF."""
