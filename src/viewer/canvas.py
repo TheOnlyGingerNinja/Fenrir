@@ -1240,6 +1240,7 @@ class PdfCanvas(QGraphicsView):
                     item = self._scene.addRect(scene_rect, border, QBrush(fill_color))
                     item.setZValue(50)
                     item.setData(0, key)
+                    item.setAcceptedMouseButtons(Qt.NoButton)
                     item.setToolTip(f"Click to type: {field['name']}")
 
                     # Add a small "✏️" indicator
@@ -1271,6 +1272,7 @@ class PdfCanvas(QGraphicsView):
                     )
                     item.setZValue(50)
                     item.setData(0, key)
+                    item.setAcceptedMouseButtons(Qt.NoButton)
                     item.setToolTip("Click to toggle checkbox")
 
                     # Check mark if checked
@@ -1294,6 +1296,7 @@ class PdfCanvas(QGraphicsView):
                     )
                     item.setZValue(50)
                     item.setData(0, key)
+                    item.setAcceptedMouseButtons(Qt.NoButton)
                     item.setToolTip("Click to select")
 
                     # Dot if selected
@@ -1311,6 +1314,7 @@ class PdfCanvas(QGraphicsView):
                     item = self._scene.addRect(scene_rect, border, QBrush(fill_color))
                     item.setZValue(50)
                     item.setData(0, key)
+                    item.setAcceptedMouseButtons(Qt.NoButton)
                     # Dropdown arrow indicator
                     arrow = self._scene.addSimpleText("▼")
                     arrow.setPos(
@@ -1356,12 +1360,15 @@ class PdfCanvas(QGraphicsView):
         if ftype in ("text", "textarea"):
             scene_rect = self._page_rect_to_scene(page_num, field["rect"])
             self._form_active_field = key
-            # Create an overlay QLineEdit for text input
+            # Create an overlay QLineEdit for text input.
+            # CRITICAL: mapFromScene converts scene coordinates to viewport
+            # (widget) coordinates — setGeometry expects viewport coords.
+            viewport_rect = self.mapFromScene(scene_rect).boundingRect()
             self._form_text_input = QLineEdit(self)
             self._form_text_input.setGeometry(
-                int(scene_rect.x()), int(scene_rect.y()),
-                int(scene_rect.width()),
-                max(20, int(scene_rect.height()))
+                int(viewport_rect.x()), int(viewport_rect.y()),
+                int(viewport_rect.width()),
+                max(20, int(viewport_rect.height()))
             )
             self._form_text_input.setText(str(field["value"]))
             self._form_text_input.selectAll()
