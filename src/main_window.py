@@ -61,12 +61,14 @@ class MainWindow(QMainWindow):
 
         # Toolbar
         self._toolbar = QToolBar("Main Toolbar")
+        self._toolbar.setObjectName("MainToolbar")
         self._toolbar.setIconSize(QSize(20, 20))
         self._toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.addToolBar(self._toolbar)
 
         # Editor toolbar (annotation tools)
         self._editor_toolbar = EditorToolbar(self)
+        self._editor_toolbar.setObjectName("EditorTools")
         self.addToolBar(self._editor_toolbar)
         self._editor_toolbar.hide()  # Hidden until a document is loaded
 
@@ -509,7 +511,7 @@ class MainWindow(QMainWindow):
         )
         if filepath:
             try:
-                self._doc._doc.save(filepath, incremental=False)
+                self._doc.doc.save(filepath, incremental=False)
                 self._status.showMessage(f"Saved: {os.path.basename(filepath)}", 5000)
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", str(e))
@@ -603,7 +605,13 @@ class MainWindow(QMainWindow):
     # ── View / Display ──────────────────────────────────────────
 
     def _on_toggle_fullscreen(self, checked: bool) -> None:
-        self._canvas.toggle_fullscreen()
+        # Fullscreen is owned by the main window — no need to delegate
+        # to the canvas anymore. Toggling here keeps the action's
+        # checked state in sync with the actual window state.
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
         self._act_fullscreen.setChecked(self.isFullScreen())
 
     def _on_toggle_sidebar(self, checked: bool) -> None:
@@ -674,10 +682,15 @@ class MainWindow(QMainWindow):
         self._search_dialog.hide_searching()
         self._search_dialog.show_results(self._search_results)
 
-    def _on_search_result_selected(self, result_index: int, _) -> None:
+    def _on_search_result_selected(self, page_num: int, result_index: int) -> None:
+        # Signal: result_selected(page_num, result_index)
+        # Prefer the page_num carried in the signal; fall back to the
+        # cached results list if for any reason the index is out of range.
         if result_index < len(self._search_results):
             result = self._search_results[result_index]
             self._canvas.go_to_page(result["page"])
+        else:
+            self._canvas.go_to_page(page_num)
 
     # ── Document Callbacks ──────────────────────────────────────
 

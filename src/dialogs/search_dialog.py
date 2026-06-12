@@ -109,10 +109,14 @@ class SearchDialog(QDialog):
 
         for i, r in enumerate(results):
             page_num = r["page"] + 1
+            page_num_0idx = r["page"]
             text = r["text"].strip()
             display_text = text[:80] + ("..." if len(text) > 80 else "")
             item = QListWidgetItem(f"Page {page_num}:  {display_text}")
             item.setData(Qt.UserRole, i)
+            # Store the page number (0-indexed) alongside the result index
+            # so the activated handler can emit both values correctly.
+            item.setData(Qt.UserRole + 1, page_num_0idx)
             self._result_list.addItem(item)
 
     def focus_input(self) -> None:
@@ -121,8 +125,10 @@ class SearchDialog(QDialog):
 
     def _on_result_activated(self, item: QListWidgetItem) -> None:
         index = item.data(Qt.UserRole)
-        if index is not None:
-            self.result_selected.emit(index, index)
+        page_num = item.data(Qt.UserRole + 1)
+        if index is not None and page_num is not None:
+            # Signal signature: result_selected(page_num, result_index)
+            self.result_selected.emit(page_num, index)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape:

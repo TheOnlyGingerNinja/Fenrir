@@ -20,6 +20,15 @@ class FenrirDocument:
     # ── properties ──────────────────────────────────────────────
 
     @property
+    def doc(self) -> fitz.Document:
+        """Public accessor for the underlying PyMuPDF document.
+
+        Use this when you need direct PyMuPDF access (e.g. for low-level
+        annotation I/O). Prefer the higher-level methods when possible.
+        """
+        return self._doc
+
+    @property
     def filepath(self) -> str:
         return self._filepath
 
@@ -43,7 +52,10 @@ class FenrirDocument:
         return self._doc.is_encrypted
 
     def authenticate(self, password: str) -> bool:
-        return self._doc.authenticate(password) == 0  # 0 = success
+        # PyMuPDF's Document.authenticate() returns 0 on failure and
+        # a non-zero value (1..4) on success indicating the permissions
+        # granted by the supplied password. Truthy == success.
+        return bool(self._doc.authenticate(password))
 
     # ── page dimensions ─────────────────────────────────────────
 
@@ -275,8 +287,8 @@ class FenrirDocument:
         fields = []
         for widget in self._doc[page_num].widgets():
             choices = []
-            if hasattr(widget, "choices") and widget.choices:
-                choices = list(widget.choices)
+            if hasattr(widget, "choice_values") and widget.choice_values:
+                choices = list(widget.choice_values)
             fields.append({
                 "page": page_num,
                 "name": widget.field_name or "",
@@ -302,8 +314,14 @@ class FenrirDocument:
                 return
 
     def save_form(self, filepath: str) -> None:
-        """Save filled form data back to the PDF (incremental save)."""
-        self._doc.save(filepath, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+        """Save filled form data back to the PDF (prefers incremental save)."""
+        try:
+            # Incremental save preserves everything and is fast,
+            # but only works when saving back to the original file.
+            self._doc.save(filepath, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+        except ValueError:
+            # Fall back to full save for new/copied files.
+            self._doc.save(filepath, incremental=False, encryption=fitz.PDF_ENCRYPT_KEEP)
         self._filepath = filepath
 
     # ── cleanup ─────────────────────────────────────────────────

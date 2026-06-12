@@ -148,6 +148,10 @@ class PdfCanvas(QGraphicsView):
         self._editor_width: float = 2.0
         self._ink_points: list[list[list[float]]] = []  # [[[x,y], ...], ...]
         self._current_stroke: list = []  # current in-progress ink stroke
+        # Page number where the in-progress ink stroke started; used by
+        # mouseReleaseEvent to attribute the stroke to the right page
+        # even if the cursor is released off-page.
+        self._current_stroke_page: int | None = None
 
         # Form fill state
         self._form_mode: bool = False
@@ -211,7 +215,24 @@ class PdfCanvas(QGraphicsView):
         self._page_items.clear()
         self._pixmap_cache.clear()
         self._search_results.clear()
+        self._search_index = -1
         self._annot_items.clear()
+        # Clean up form-fill state too — otherwise stale form fields and
+        # overlay items leak into the next document, and a dangling
+        # QLineEdit (_form_text_input) can outlive its parent document.
+        if self._form_mode:
+            self._form_mode = False
+        self._cancel_form_input()
+        self._clear_form_overlays()
+        self._form_fields.clear()
+        self._ink_points = []
+        self._current_stroke = []
+        # Remove any temporary ink preview leftover from an interrupted stroke
+        if hasattr(self, '_temp_ink_item') and self._temp_ink_item:
+            scene = self._scene
+            if scene:
+                scene.removeItem(self._temp_ink_item)
+            self._temp_ink_item = None
         self._scene.clear()
         self._current_page = 0
 
@@ -834,6 +855,10 @@ class PdfCanvas(QGraphicsView):
                 px, py = self._scene_to_page_coords(page_num, scene_pos)
                 self._ink_points = []
                 self._current_stroke = [[px, py]]
+                # Remember which page the stroke started on so the release
+                # handler can attribute the ink to the correct page even
+                # if the user drags the cursor off-page before releasing.
+                self._current_stroke_page = page_num
                 return
 
         # ── Eraser: find and delete annotation ──
@@ -907,13 +932,17 @@ class PdfCanvas(QGraphicsView):
         if self._active_tool == TOOL_INK and self._current_stroke:
             if len(self._current_stroke) > 2:
                 points = self._current_stroke
-                # Find which page the ink is on
+                # Find which page the ink is on. The release position can
+                # be off-page if the user drags the cursor out of the page
+                # boundary, so prefer the page recorded at stroke start.
                 if self._page_items and self._annot_manager:
-                    # Use the first point to determine page
-                    scene_pos = self.mapToScene(event.pos())
-                    page_num = self._page_index_at_pos(scene_pos)
-                    if page_num is None:
-                        # Fallback: use anchor page from first point
+                    page_num = getattr(self, "_current_stroke_page", None)
+                    if page_num is None or page_num >= len(self._page_items):
+                        # Fallback: try the release position, then the
+                        # first point's page.
+                        scene_pos = self.mapToScene(event.pos())
+                        page_num = self._page_index_at_pos(scene_pos)
+                    if page_num is None or page_num >= len(self._page_items):
                         page_num = 0
                     annot = self._annot_manager.add_ink(
                         page_num, [points], color=self._editor_color,
@@ -922,6 +951,7 @@ class PdfCanvas(QGraphicsView):
                     self.annotation_created.emit(annot)
             self._current_stroke = []
             self._ink_points = []
+            self._current_stroke_page = None
             return
 
         super().mouseReleaseEvent(event)
@@ -1568,13 +1598,11 @@ class PdfCanvas(QGraphicsView):
         self.search_result_clicked.emit(result.page)
 
     # ── fullscreen ──────────────────────────────────────────────
-
-    def toggle_fullscreen(self) -> None:
-        window = self.window()
-        if window.isFullScreen():
-            window.showNormal()
-        else:
-            window.showFullScreen()
+    # NOTE: Fullscreen toggling is intentionally handled by the parent
+    # MainWindow (it owns the window state, menus, and toolbars). The
+    # canvas used to expose toggle_fullscreen() reaching up via
+    # self.window(), which was a design smell. Use the action on the
+    # main window (F11 / View → Fullscreen) instead.
 
     # ── drag & drop ─────────────────────────────────────────────
 

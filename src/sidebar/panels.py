@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, Signal, QSize, QRect, QThread, QObject
 from PySide6.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QListWidget, QListWidgetItem, QLabel, QSplitter,
+    QListWidget, QListWidgetItem, QListView, QLabel, QSplitter,
     QHBoxLayout, QPushButton, QFrame, QSizePolicy,
     QApplication, QStackedWidget, QMenu,
 )
@@ -236,10 +236,10 @@ class ThumbnailPanel(QWidget):
         layout.addWidget(header)
 
         self._list = QListWidget()
-        self._list.setViewMode(QListWidget.ListMode)
+        self._list.setViewMode(QListView.ListMode)
         self._list.setIconSize(QSize(140, 180))
         self._list.setSpacing(4)
-        self._list.setFlow(QListWidget.TopToBottom)
+        self._list.setFlow(QListView.TopToBottom)
         self._list.setWordWrap(True)
         self._list.currentRowChanged.connect(self._on_row_changed)
         layout.addWidget(self._list)

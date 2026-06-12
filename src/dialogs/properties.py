@@ -114,7 +114,7 @@ class DocumentPropertiesDialog(QDialog):
         seen = set()
         for i in range(min(self._doc.page_count, 10)):
             try:
-                blocks = self._doc._doc[i].get_text("dict", flags=3)["blocks"]
+                blocks = self._doc.doc[i].get_text("dict", flags=3)["blocks"]
                 for block in blocks:
                     if block["type"] == 0:
                         for line in block["lines"]:

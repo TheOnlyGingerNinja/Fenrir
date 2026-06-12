@@ -158,7 +158,7 @@ class AnnotationManager:
         """Load existing PDF annotations into memory."""
         if not self._doc:
             return
-        pdf = self._doc._doc  # access raw fitz doc
+        pdf = self._doc.doc  # access raw fitz doc via public property
         for page_num in range(pdf.page_count):
             page = pdf[page_num]
             for an in page.annots():
@@ -247,7 +247,7 @@ class AnnotationManager:
                 # Delete from PDF if it was saved
                 if not annot.is_new and annot.pdf_annot:
                     try:
-                        page = self._doc._doc[annot.page]
+                        page = self._doc.doc[annot.page]
                         page.delete_annot(annot.pdf_annot)
                     except Exception:
                         pass
@@ -302,7 +302,7 @@ class AnnotationManager:
                 annot = self._annotations[annot_id]
                 if not annot.is_new and annot.pdf_annot:
                     try:
-                        page = self._doc._doc[annot.page]
+                        page = self._doc.doc[annot.page]
                         page.delete_annot(annot.pdf_annot)
                     except Exception:
                         pass
@@ -406,7 +406,7 @@ class AnnotationManager:
         # Delete from PDF if already committed
         if annot.pdf_annot:
             try:
-                page = self._doc._doc[annot.page]
+                page = self._doc.doc[annot.page]
                 page.delete_annot(annot.pdf_annot)
             except Exception:
                 pass
@@ -440,7 +440,7 @@ class AnnotationManager:
         if not self._doc:
             return False
 
-        pdf = self._doc._doc
+        pdf = self._doc.doc
 
         try:
             for annot in self._annotations.values():
