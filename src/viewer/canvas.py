@@ -30,6 +30,11 @@ from src.editor.widgets import TOOL_SELECT, TOOL_HIGHLIGHT, TOOL_UNDERLINE, \
 
 # ── constants ──────────────────────────────────────────────────
 
+# Layout modes
+LAYOUT_CONTINUOUS = "continuous"
+LAYOUT_SINGLE = "single"
+LAYOUT_FACING = "facing"
+
 ZOOM_LEVELS = [
     0.25, 0.33, 0.50, 0.67, 0.75, 0.80, 0.90,
     1.00, 1.25, 1.50, 1.75, 2.00, 2.50, 3.00, 4.00, 5.00,
@@ -91,6 +96,7 @@ class PdfCanvas(QGraphicsView):
     # Signals
     page_changed = Signal(int)       # Emitted when current visible page changes
     zoom_changed = Signal(float)     # Emitted when zoom changes
+    layout_mode_changed = Signal(str)  # Emitted when layout mode changes
     text_selected = Signal(str)      # Emitted when text is selected
     search_result_clicked = Signal(int)  # Emitted when a search result is activated
     document_loaded = Signal()       # Emitted after a document finishes loading
@@ -111,7 +117,7 @@ class PdfCanvas(QGraphicsView):
         # View settings
         self._zoom = 1.0
         self._fit_mode = None  # "width", "page", or None
-        self._continuous = True
+        self._layout_mode = LAYOUT_CONTINUOUS
         self._dark_mode = False
         self._dpi = BASE_DPI
 
@@ -225,7 +231,7 @@ class PdfCanvas(QGraphicsView):
     # ── page layout ─────────────────────────────────────────────
 
     def _build_pages(self) -> None:
-        """Create PageGraphicsItem for each page and arrange them vertically."""
+        """Create PageGraphicsItem for each page in the current layout mode."""
         if not self._doc:
             return
 
@@ -233,10 +239,20 @@ class PdfCanvas(QGraphicsView):
         y_offset = MARGIN
         self._page_height_cache = {}
 
+        if self._layout_mode == LAYOUT_SINGLE:
+            self._build_single(y_offset)
+        elif self._layout_mode == LAYOUT_FACING:
+            self._build_facing(y_offset)
+        else:
+            self._build_continuous(y_offset)
+
+        self._update_scene_rect()
+
+    def _build_continuous(self, y_offset: float) -> None:
+        """Arrange pages in a single vertical column (default)."""
         for i in range(self._doc.page_count):
             size = self._doc.page_size(i, dpi=72.0)
             pw, ph = size.width(), size.height()
-            # Convert points to pixels at current zoom
             ratio = self._dpi / 72.0
             w = pw * ratio * self._zoom
             h = ph * ratio * self._zoom
@@ -245,8 +261,6 @@ class PdfCanvas(QGraphicsView):
 
             rect = QRectF(MARGIN, y_offset, w, h)
             item = PageGraphicsItem(i, rect)
-
-            # Placeholder border while loading
             item.setPos(MARGIN, y_offset)
             item.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
@@ -254,7 +268,115 @@ class PdfCanvas(QGraphicsView):
             self._page_items.append(item)
             y_offset += h + PAGE_GAP
 
-        self._update_scene_rect()
+    def _build_single(self, y_offset: float) -> None:
+        """Arrange pages vertically, each centered horizontally."""
+        # Find widest page at current zoom
+        max_w = 0
+        sizes = []
+        for i in range(self._doc.page_count):
+            s = self._doc.page_size(i, dpi=72.0)
+            ratio = self._dpi / 72.0
+            pw, ph = s.width(), s.height()
+            w = pw * ratio * self._zoom
+            h = ph * ratio * self._zoom
+            max_w = max(max_w, w)
+            sizes.append((w, h))
+
+        scene_w = max_w + 2 * MARGIN
+
+        for i in range(self._doc.page_count):
+            w, h = sizes[i]
+            self._page_height_cache[i] = h
+            x = (scene_w - w) / 2
+            rect = QRectF(x, y_offset, w, h)
+            item = PageGraphicsItem(i, rect)
+            item.setPos(x, y_offset)
+            item.setFlag(QGraphicsItem.ItemIsSelectable, False)
+            self._scene.addItem(item)
+            self._page_items.append(item)
+            y_offset += h + PAGE_GAP
+
+    def _build_facing(self, y_offset: float) -> None:
+        """Arrange pages in facing-page (two-up) spreads.
+
+        Convention: page 0 (cover) alone on the right,
+        then pages 1-2 as a spread, 3-4 as a spread, etc.
+        """
+        # Pre-compute page sizes
+        sizes = []
+        heights = {}
+        for i in range(self._doc.page_count):
+            s = self._doc.page_size(i, dpi=72.0)
+            ratio = self._dpi / 72.0
+            pw, ph = s.width(), s.height()
+            w = pw * ratio * self._zoom
+            h = ph * ratio * self._zoom
+            sizes.append((w, h))
+            heights[i] = h
+
+        scene_w = self.viewport().width() if self.viewport() else 800
+
+        i = 0
+        while i < self._doc.page_count:
+            if i == 0:
+                # Cover page: alone on the right, center of viewport
+                w, h = sizes[0]
+                self._page_height_cache[0] = h
+                x = (scene_w - w) / 2 + MARGIN
+                rect = QRectF(x, y_offset, w, h)
+                item = PageGraphicsItem(0, rect)
+                item.setPos(x, y_offset)
+                item.setFlag(QGraphicsItem.ItemIsSelectable, False)
+                self._scene.addItem(item)
+                self._page_items.append(item)
+                y_offset += h + PAGE_GAP
+                i += 1
+
+            else:
+                # Spread: two pages side by side
+                if i + 1 < self._doc.page_count:
+                    lw, lh = sizes[i]
+                    rw, rh = sizes[i + 1]
+                    gap = max(4, PAGE_GAP)
+                    spread_w = lw + gap + rw
+                    x_start = max(MARGIN, (scene_w - spread_w) / 2)
+                    spread_h = max(lh, rh)
+
+                    self._page_height_cache[i] = lh
+                    self._page_height_cache[i + 1] = rh
+
+                    # Left page of spread
+                    lrect = QRectF(x_start, y_offset, lw, lh)
+                    litem = PageGraphicsItem(i, lrect)
+                    litem.setPos(x_start, y_offset)
+                    litem.setFlag(QGraphicsItem.ItemIsSelectable, False)
+                    self._scene.addItem(litem)
+                    self._page_items.append(litem)
+
+                    # Right page of spread
+                    rx = x_start + lw + gap
+                    rrect = QRectF(rx, y_offset, rw, rh)
+                    ritem = PageGraphicsItem(i + 1, rrect)
+                    ritem.setPos(rx, y_offset)
+                    ritem.setFlag(QGraphicsItem.ItemIsSelectable, False)
+                    self._scene.addItem(ritem)
+                    self._page_items.append(ritem)
+
+                    y_offset += spread_h + PAGE_GAP
+                    i += 2
+                else:
+                    # Odd last page, centered solo
+                    w, h = sizes[i]
+                    self._page_height_cache[i] = h
+                    x = (scene_w - w) / 2 + MARGIN
+                    rect = QRectF(x, y_offset, w, h)
+                    item = PageGraphicsItem(i, rect)
+                    item.setPos(x, y_offset)
+                    item.setFlag(QGraphicsItem.ItemIsSelectable, False)
+                    self._scene.addItem(item)
+                    self._page_items.append(item)
+                    y_offset += h + PAGE_GAP
+                    i += 1
 
     def _update_scene_rect(self) -> None:
         """Update the scene bounding rectangle."""
@@ -444,10 +566,27 @@ class PdfCanvas(QGraphicsView):
             if self._form_mode:
                 self._render_form_overlays()
 
+    def set_layout_mode(self, mode: str) -> None:
+        """Switch between continuous, single-page, and facing-page layouts."""
+        if mode == self._layout_mode:
+            return
+        if mode not in (LAYOUT_CONTINUOUS, LAYOUT_SINGLE, LAYOUT_FACING):
+            return
+        self._layout_mode = mode
+        # If we're leaving single/page mode, re-enable drag scrolling
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self._rebuild_and_render()
+        self.go_to_page(0)
+        self.layout_mode_changed.emit(mode)
+
+    @property
+    def layout_mode(self) -> str:
+        return self._layout_mode
+
     # ── wheel zoom ──────────────────────────────────────────────
 
     def wheelEvent(self, event) -> None:
-        """Scroll vertically by default; zoom with Ctrl+Wheel."""
+        """Scroll vertically by default; zoom with Ctrl+Wheel; page-flip in single/facing."""
         if event.modifiers() & Qt.ControlModifier:
             delta = event.angleDelta().y()
             if delta > 0:
@@ -455,29 +594,66 @@ class PdfCanvas(QGraphicsView):
             else:
                 self.zoom_out()
             event.accept()
+        elif self._layout_mode != LAYOUT_CONTINUOUS:
+            # Page-flip: scroll wheel flips pages instead of smooth scrolling
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.go_to_prev_page()
+            else:
+                self.go_to_next_page()
+            event.accept()
         else:
             super().wheelEvent(event)
 
     # ── navigation ──────────────────────────────────────────────
 
     def go_to_page(self, page_num: int) -> None:
-        """Navigate to a specific page by number (0-based)."""
+        """Navigate to a specific page by number (0-based).
+
+        In facing mode, advances to the spread containing the page.
+        In single mode, centers the page in the viewport.
+        """
         if not self._doc or not self._page_items:
             return
         page_num = max(0, min(self._doc.page_count - 1, page_num))
 
         if page_num < len(self._page_items):
             item = self._page_items[page_num]
-            target_y = item.pos().y() - MARGIN
-            self.verticalScrollBar().setValue(int(target_y))
+            if self._layout_mode == LAYOUT_SINGLE:
+                # Center the page in the viewport
+                self.centerOn(item)
+            else:
+                target_y = item.pos().y() - MARGIN
+                self.verticalScrollBar().setValue(int(target_y))
             self._current_page = page_num
             self.page_changed.emit(page_num)
 
     def go_to_next_page(self) -> None:
-        self.go_to_page(self._current_page + 1)
+        if self._layout_mode == LAYOUT_FACING:
+            # Skip to next spread
+            target = self._current_page
+            if target == 0:
+                target = 1  # first spread starts at page 1
+            elif target % 2 == 0:  # right page of a spread
+                target += 1  # next spread's first page
+            else:  # left page of a spread
+                target += 2  # skip to next spread
+            self.go_to_page(target)
+        else:
+            self.go_to_page(self._current_page + 1)
 
     def go_to_prev_page(self) -> None:
-        self.go_to_page(self._current_page - 1)
+        if self._layout_mode == LAYOUT_FACING:
+            target = self._current_page
+            if target <= 1:
+                target = 0  # back to cover
+            elif target % 2 == 0:  # right page of a spread
+                target -= 3  # previous spread's first page
+            else:  # left page of a spread
+                target -= 2  # previous spread's first page
+            self.go_to_page(max(0, target))
+        else:
+            self.go_to_page(self._current_page - 1)
 
     def go_to_first_page(self) -> None:
         self.go_to_page(0)

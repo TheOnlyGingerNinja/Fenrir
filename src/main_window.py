@@ -8,7 +8,7 @@ import sys
 
 from PySide6.QtCore import Qt, QSize, QTimer, Slot
 from PySide6.QtGui import (
-    QAction, QKeySequence, QIcon, QColor, QPalette, QFont,
+    QAction, QActionGroup, QKeySequence, QIcon, QColor, QPalette, QFont,
     QCloseEvent, QTextDocument, QPainter, QBrush,
 )
 from PySide6.QtWidgets import (
@@ -16,11 +16,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QSpinBox,
     QPushButton, QComboBox, QStyle, QStyleFactory,
     QMessageBox, QFileDialog, QApplication, QMenu, QMenuBar,
-    QCheckBox, QScrollArea,
+    QCheckBox, QScrollArea, QSlider,
 )
 
 from src.engine.document import FenrirDocument
-from src.viewer.canvas import PdfCanvas
+from src.viewer.canvas import PdfCanvas, LAYOUT_CONTINUOUS, LAYOUT_SINGLE, LAYOUT_FACING
 from src.sidebar.panels import SidebarWidget
 from src.dialogs.search_dialog import SearchDialog
 from src.dialogs.goto_dialog import GotoPageDialog
@@ -91,12 +91,24 @@ class MainWindow(QMainWindow):
         # Status bar
         self._status = QStatusBar()
         self._page_label = QLabel("Page: - / -")
-        self._zoom_label = QLabel("Zoom: 100%")
         self._file_label = QLabel("")
         self._file_label.setStyleSheet("padding-left: 12px;")
         self._status.addWidget(self._file_label, 1)
         self._status.addPermanentWidget(self._page_label)
+
+        # Zoom slider + label
+        self._zoom_slider = QSlider(Qt.Horizontal)
+        self._zoom_slider.setRange(10, 500)
+        self._zoom_slider.setValue(100)
+        self._zoom_slider.setFixedWidth(120)
+        self._zoom_slider.setToolTip("Zoom level")
+        self._status.addPermanentWidget(self._zoom_slider)
+
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setFixedWidth(45)
+        self._zoom_label.setAlignment(Qt.AlignCenter)
         self._status.addPermanentWidget(self._zoom_label)
+
         self.setStatusBar(self._status)
 
     def _setup_actions(self) -> None:
@@ -198,6 +210,30 @@ class MainWindow(QMainWindow):
         self._act_dark_mode.setCheckable(True)
         self._act_dark_mode.setChecked(AppSettings.dark_mode())
         self._act_dark_mode.triggered.connect(self._on_toggle_dark_mode)
+
+        # ── Layout Mode Actions ──
+        self._layout_group = QActionGroup(self)
+        self._layout_group.setExclusive(True)
+
+        self._act_layout_continuous = QAction("📜 Continuous Scroll", self)
+        self._act_layout_continuous.setCheckable(True)
+        self._act_layout_continuous.setChecked(True)
+        self._act_layout_continuous.triggered.connect(lambda: self._canvas.set_layout_mode(LAYOUT_CONTINUOUS))
+
+        self._act_layout_single = QAction("📄 Single Page", self)
+        self._act_layout_single.setCheckable(True)
+        self._act_layout_single.triggered.connect(lambda: self._canvas.set_layout_mode(LAYOUT_SINGLE))
+
+        self._act_layout_facing = QAction("📖 Two Pages (Facing)", self)
+        self._act_layout_facing.setCheckable(True)
+        self._act_layout_facing.triggered.connect(lambda: self._canvas.set_layout_mode(LAYOUT_FACING))
+
+        self._layout_group.addAction(self._act_layout_continuous)
+        self._layout_group.addAction(self._act_layout_single)
+        self._layout_group.addAction(self._act_layout_facing)
+
+        # Sync layout check state when canvas mode changes
+        self._canvas.layout_mode_changed.connect(self._on_layout_mode_changed)
 
         # ── Edit Actions ──
         self._act_search = QAction("🔎 Find", self)
@@ -306,6 +342,14 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._act_sidebar)
         view_menu.addAction(self._act_dark_mode)
         view_menu.addSeparator()
+
+        # Layout submenu
+        layout_menu = view_menu.addMenu("📐 Layout")
+        layout_menu.addAction(self._act_layout_continuous)
+        layout_menu.addAction(self._act_layout_single)
+        layout_menu.addAction(self._act_layout_facing)
+        view_menu.addSeparator()
+
         view_menu.addAction(self._act_zoom_in)
         view_menu.addAction(self._act_zoom_out)
         view_menu.addAction(self._act_zoom_fit_width)
@@ -336,6 +380,8 @@ class MainWindow(QMainWindow):
         self._canvas.zoom_changed.connect(self._on_zoom_changed)
         self._canvas.document_loaded.connect(self._on_document_loaded)
 
+        self._zoom_slider.valueChanged.connect(self._on_zoom_slider_moved)
+
         self._sidebar.page_navigated.connect(self._canvas.go_to_page)
         self._canvas.search_result_clicked.connect(self._sidebar.highlight_page)
 
@@ -347,6 +393,7 @@ class MainWindow(QMainWindow):
         self._editor_toolbar.save_requested.connect(self._on_save_annotations)
         self._canvas.annotation_created.connect(self._on_annotation_created)
         self._canvas.annotation_deleted.connect(self._on_annotation_deleted)
+        self._sidebar.delete_requested.connect(self._on_sidebar_delete_annotation)
 
     # ── State Persistence ───────────────────────────────────────
 
@@ -637,6 +684,9 @@ class MainWindow(QMainWindow):
     def _on_document_loaded(self) -> None:
         """Called after a document finishes loading in the canvas."""
         if self._doc:
+            # Load sidebar (TOC, thumbnails)
+            self._sidebar.load(self._doc)
+
             self._update_page_spinner(
                 self._canvas.current_page, self._doc.page_count
             )
@@ -649,6 +699,10 @@ class MainWindow(QMainWindow):
             # Enable form fill if the document has AcroForms
             self._act_toggle_form.setEnabled(self._canvas.has_form_fields())
 
+            # Pass annotation manager to sidebar
+            self._sidebar.set_annotation_manager(self._canvas.annot_manager)
+            self._sidebar.refresh_annotations()
+
     def _on_page_changed(self, page_num: int) -> None:
         """Update UI when the visible page changes."""
         self._update_page_spinner(page_num, self._doc.page_count if self._doc else 0)
@@ -657,7 +711,21 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, zoom: float) -> None:
         """Update zoom display."""
-        self._zoom_label.setText(f"Zoom: {int(zoom * 100)}%")
+        pct = int(zoom * 100)
+        self._zoom_label.setText(f"{pct}%")
+        self._zoom_slider.blockSignals(True)
+        self._zoom_slider.setValue(pct)
+        self._zoom_slider.blockSignals(False)
+
+    def _on_zoom_slider_moved(self, value: int) -> None:
+        """Handle zoom slider drag."""
+        self._canvas.zoom_to(value / 100.0)
+
+    def _on_layout_mode_changed(self, mode: str) -> None:
+        """Sync layout radio buttons when canvas mode changes."""
+        self._act_layout_continuous.setChecked(mode == LAYOUT_CONTINUOUS)
+        self._act_layout_single.setChecked(mode == LAYOUT_SINGLE)
+        self._act_layout_facing.setChecked(mode == LAYOUT_FACING)
 
     def _update_page_spinner(self, current: int, total: int) -> None:
         """Update the page spinner in the toolbar."""
@@ -738,6 +806,7 @@ class MainWindow(QMainWindow):
     def _on_annotation_created(self, annot) -> None:
         """Handle new annotation created."""
         count = self._canvas.annot_manager.count() if self._canvas.annot_manager else 0
+        self._sidebar.refresh_annotations()
         self._status.showMessage(
             f"Added {annot.type} annotation (total: {count})", 3000
         )
@@ -745,9 +814,18 @@ class MainWindow(QMainWindow):
     def _on_annotation_deleted(self, annot_id: str) -> None:
         """Handle annotation deletion."""
         count = self._canvas.annot_manager.count() if self._canvas.annot_manager else 0
+        self._sidebar.refresh_annotations()
         self._status.showMessage(
             f"Deleted annotation (remaining: {count})", 3000
         )
+
+    def _on_sidebar_delete_annotation(self, annot_id: str) -> None:
+        """Handle annotation deletion from the sidebar context menu."""
+        if self._canvas.annot_manager:
+            self._canvas.annot_manager.remove(annot_id)
+            self._canvas._clear_annotation_overlays()
+            self._canvas._render_annotation_overlays()
+            self._canvas.annotation_deleted.emit(annot_id)
 
     # ── About ───────────────────────────────────────────────────
 
