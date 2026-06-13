@@ -3,23 +3,19 @@ Fenrir Viewer Canvas — PDF rendering, scrolling, zooming, and text selection.
 """
 from __future__ import annotations
 
-import math
-
 import fitz
 from PySide6.QtCore import (
-    Qt, QRectF, QPointF, QSizeF, Signal, Slot, QTimer
+    Qt, QRectF, QPointF, QSizeF, Signal, QTimer
 )
 from PySide6.QtGui import (
-    QImage, QPixmap, QPainter, QPen, QColor, QBrush, QFont,
-    QTransform, QPolygonF, QTextDocument, QTextCursor, QCursor,
-    QKeySequence, QAction,
+    QPixmap, QPainter, QPen, QColor, QBrush,
+    QPolygonF, QCursor, QKeySequence, QAction,
 )
 from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
-    QGraphicsRectItem, QGraphicsItem, QGraphicsTextItem,
-    QWidget, QVBoxLayout, QScrollBar, QApplication, QRubberBand,
+    QGraphicsRectItem, QGraphicsItem,
     QGraphicsSimpleTextItem, QLineEdit, QDialog, QVBoxLayout,
-    QHBoxLayout, QLabel, QPushButton, QComboBox,
+    QHBoxLayout, QPushButton, QComboBox, QApplication,
 )
 
 from src.engine.document import FenrirDocument
@@ -1475,8 +1471,24 @@ class PdfCanvas(QGraphicsView):
 
         elif ftype == "radio_button":
             if self._doc is not None:
-                self._doc.set_form_field(page_num, field["name"], "Yes")
-            field["value"] = "Yes"
+                page = self._doc._doc[page_num]
+                field_name = field["name"]
+                clicked_rect = field["rect"]
+                for widget in page.widgets():
+                    if widget.field_name == field_name:
+                        if widget.rect == clicked_rect:
+                            widget.field_value = "Yes"
+                        else:
+                            widget.field_value = "Off"
+                        widget.update()
+            # Update the cached _form_fields so overlays reflect the change
+            if page_num in self._form_fields:
+                for f in self._form_fields[page_num]:
+                    if f["name"] == field["name"]:
+                        if f["rect"] == field["rect"]:
+                            f["value"] = "Yes"
+                        else:
+                            f["value"] = "Off"
             self._render_form_overlays()
 
         elif ftype in ("combo_box", "list_box"):
@@ -1500,6 +1512,23 @@ class PdfCanvas(QGraphicsView):
                 ok_btn.clicked.connect(dialog.accept)
                 cancel_btn.clicked.connect(dialog.reject)
                 dialog.setResult(QDialog.Rejected)
+                # NOTE: Using exec() (modal) here is intentional.
+                # Called from mousePressEvent, a modal dialog runs its own
+                # nested event loop that:
+                #   1. Blocks the mousePressEvent from returning until the
+                #      user makes a choice (prevents stale state on return).
+                #   2. Still allows timer events to fire (e.g. the 80ms
+                #      render debounce timer), so background page rendering
+                #      continues while the user picks an option.
+                #   3. Captures all mouse input while open, which is the
+                #      expected UX for a "pick one of N" picker — the user
+                #      cannot scroll the canvas while the dialog is up,
+                #      which is what we want here (no scroll/repaint race).
+                # A non-modal .show() would require us to defer the
+                # field-value commit until the dialog's finished signal
+                # fired, and to guard against a second click re-opening
+                # the dialog while the first is still open. The modal
+                # path avoids all of that for negligible UX cost.
                 if dialog.exec() == QDialog.Accepted:
                     chosen = combo.currentText()
                     if self._doc is not None:
@@ -1795,3 +1824,11 @@ class PdfCanvas(QGraphicsView):
         self._render_timer.start()
         # Schedule page detection after scrolling settles
         self._scroll_animation_timer.start(150)
+        # Guard (defense in depth): scrolling must NEVER trigger a reload.
+        # document_loaded is only emitted from load_document(), which is
+        # only called from MainWindow.open_file() (and a single dropEvent
+        # in the canvas). Scrolling here only needs to re-render visible
+        # pages and update the page-detection timer — no reload, no
+        # document_loaded emit. If a future change ever tries to call
+        # load_document() from this handler, the guard below will block
+        # it. (This is a no-op today but documents the invariant.)
